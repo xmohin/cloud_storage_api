@@ -3,9 +3,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     APP_NAME: str = "Gallery Vault"
-    ENVIRONMENT: str = "development"
+    ENVIRONMENT: str = "production"
     DEBUG: bool = False
     
+    # Render Environment Variables
     MONGO_URI: str = "mongodb://localhost:27017/gallery_vault"
     DATABASE_NAME: str = "gallery_vault"
     
@@ -16,12 +17,13 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
     OTP_EXPIRE_MINUTES: int = 10
     
-    TELEGRAM_API_ID: int
-    TELEGRAM_API_HASH: str
-    TELEGRAM_BOT_TOKEN: str
-    TELEGRAM_CHANNEL_ID: int
+    # Defaults added to prevent boot crashes if env vars are missing
+    TELEGRAM_API_ID: int = 0
+    TELEGRAM_API_HASH: str = ""
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_CHANNEL_ID: int = 0
     
-    BREVO_API_KEY: str
+    BREVO_API_KEY: str = ""
     BREVO_SENDER_EMAIL: str = "send@mohinbd.com"
     BREVO_SENDER_NAME: str = "Gallery Vault"
     
@@ -35,4 +37,9 @@ class Settings(BaseSettings):
     )
 
 settings = Settings()
-os.makedirs(settings.TEMP_STORAGE_PATH, exist_ok=True)
+
+# Safely create temporary directory for uploads
+try:
+    os.makedirs(settings.TEMP_STORAGE_PATH, exist_ok=True)
+except Exception:
+    pass
