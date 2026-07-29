@@ -1,5 +1,5 @@
 import os
-from pydantic import Field
+from pydantic import Field, AliasChoices
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -7,16 +7,19 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "production"
     DEBUG: bool = False
     
-    # MONGO_URI বা MONGODB_URI দুটোই রিড করবে
+    # MONGO_URI এবং MONGODB_URI দুটো নামই সাপোর্ট করবে
     MONGO_URI: str = Field(
         default="mongodb://localhost:27017/gallery_vault",
-        validation_alias="MONGODB_URI"
+        validation_alias=AliasChoices("MONGO_URI", "MONGODB_URI")
     )
     DATABASE_NAME: str = "gallery_vault"
     
     JWT_SECRET_KEY: str = "secret_key_change_me_in_production_32bytes_min"
     JWT_REFRESH_SECRET_KEY: str = "refresh_secret_key_change_me_in_production"
-    ALGORITHM: str = Field(default="HS256", validation_alias="JWT_ALGORITHM")
+    ALGORITHM: str = Field(
+        default="HS256", 
+        validation_alias=AliasChoices("ALGORITHM", "JWT_ALGORITHM")
+    )
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
     OTP_EXPIRE_MINUTES: int = 10
