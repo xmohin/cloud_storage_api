@@ -1,5 +1,6 @@
 import asyncio
 import os
+from typing import Optional
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError
 from app.core.config import settings
