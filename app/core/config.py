@@ -24,16 +24,18 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
     OTP_EXPIRE_MINUTES: int = 10
     
+    # Telegram Credentials (Userbot / String Session)
     TELEGRAM_API_ID: int = 0
     TELEGRAM_API_HASH: str = ""
-    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_STRING_SESSION: str = ""
     TELEGRAM_CHANNEL_ID: int = 0
     
     BREVO_API_KEY: str = ""
     BREVO_SENDER_EMAIL: str = "send@mohinbd.com"
     BREVO_SENDER_NAME: str = "Gallery Vault"
     
-    MAX_UPLOAD_SIZE_MB: int = 2000
+    # Premium অ্যাকাউন্টে ৪ GB পর্যন্ত সাপোর্ট করায় লিমিট বাড়াতে পারেন
+    MAX_UPLOAD_SIZE_MB: int = 4000
     TEMP_STORAGE_PATH: str = "/tmp/gallery_vault_temp"
     
     model_config = SettingsConfigDict(
