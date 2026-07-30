@@ -1,7 +1,9 @@
 """Gallery Vault API — application entry point."""
 
+import importlib
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from typing import Any
+from fastapi import APIRouter, FastAPI
 
 from app import __version__
 from app.core.config import get_settings
@@ -12,28 +14,45 @@ from app.services.email_service import email_service
 from app.services.telegram_service import telegram_service
 from app.services.upload_service import upload_service
 
-# ── API Routers Import ──
-from app.api.v1.admin import router as admin_router
-from app.api.v1.auth import router as auth_router
-from app.api.v1.backup import router as backup_router
-from app.api.v1.files import router as files_router
-from app.api.v1.folders import router as folders_router
-from app.api.v1.notifications import router as notifications_router
-from app.api.v1.search import router as search_router
-from app.api.v1.security import router as security_router
-from app.api.v1.storage import router as storage_router
-from app.api.v1.system import router as system_router
 
-# Singular/Plural Naming Resilience for Share & User routers
-try:
-    from app.api.v1.shares import router as share_router
-except ImportError:
-    from app.api.v1.share import router as share_router
+def safe_import_router(module_paths: list[str], router_attr_names: list[str] = None) -> APIRouter:
+    """Helper to defensively load FastAPI APIRouter instances across naming conventions."""
+    if router_attr_names is None:
+        router_attr_names = ["router", "api_router"]
 
-try:
-    from app.api.v1.users import router as user_router
-except ImportError:
-    from app.api.v1.user import router as user_router
+    last_error = None
+    for path in module_paths:
+        try:
+            mod = importlib.import_module(path)
+            # 1. Check standard names ("router", "api_router")
+            for attr in router_attr_names:
+                if hasattr(mod, attr):
+                    return getattr(mod, attr)
+            # 2. Check path-derived name (e.g. "security_router")
+            module_name = path.split(".")[-1]
+            specific_attr = f"{module_name}_router"
+            if hasattr(mod, specific_attr):
+                return getattr(mod, specific_attr)
+        except ImportError as err:
+            last_error = err
+            continue
+
+    raise ImportError(f"Could not load router from {module_paths}. Last error: {last_error}")
+
+
+# ── Defensive Router Imports ──
+admin_router = safe_import_router(["app.api.v1.admin"])
+auth_router = safe_import_router(["app.api.v1.auth"])
+backup_router = safe_import_router(["app.api.v1.backup"])
+files_router = safe_import_router(["app.api.v1.files", "app.api.v1.file"])
+folders_router = safe_import_router(["app.api.v1.folders", "app.api.v1.folder"])
+notifications_router = safe_import_router(["app.api.v1.notifications", "app.api.v1.notification"])
+search_router = safe_import_router(["app.api.v1.search"])
+security_router = safe_import_router(["app.api.v1.security"])
+share_router = safe_import_router(["app.api.v1.shares", "app.api.v1.share"])
+storage_router = safe_import_router(["app.api.v1.storage"])
+system_router = safe_import_router(["app.api.v1.system"])
+user_router = safe_import_router(["app.api.v1.users", "app.api.v1.user"])
 
 
 settings = get_settings()
