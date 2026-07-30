@@ -67,7 +67,6 @@ class FileMetadata(ORMModel):
     deleted_at: datetime | None = None; tags: list[str] = Field(default_factory=list)
     created_at: datetime; updated_at: datetime
 
-# ── যুক্ত করা নতুন Schemas ──
 class FileListResponse(BaseModel):
     files: list[FileMetadata] = Field(default_factory=list)
     total: int = 0
@@ -93,7 +92,6 @@ class FileMove(BaseModel):
 class FileCopy(BaseModel):
     file_ids: list[str]; new_parent_id: str | None = None
 
-# files.py এর সাথে মিল রাখার জন্য Alias
 FolderCreateRequest = FolderCreate
 FileRenameRequest = FileRename
 FileMoveRequest = FileMove
@@ -108,6 +106,10 @@ class SharePasswordUpdate(BaseModel):
 
 class ShareExpireUpdate(BaseModel):
     expires_in_hours: int | None = Field(None, gt=0, le=720)
+
+# <--- নতুন যুক্ত করা হলো --->
+class ShareAccessRequest(BaseModel):
+    password: str | None = Field(None, min_length=1, max_length=32)
 
 # ── Notifications ──
 class Notification(ORMModel):
