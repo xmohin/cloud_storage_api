@@ -16,28 +16,41 @@ from app.services.upload_service import upload_service
 
 
 def safe_import_router(module_paths: list[str], router_attr_names: list[str] = None) -> APIRouter:
-    """Helper to defensively load FastAPI APIRouter instances across naming conventions."""
+    """Helper to defensively load FastAPI APIRouter instances across naming conventions.
+    
+    Only skips a candidate module if the module file itself does NOT exist.
+    If the module exists but fails due to internal errors, the actual exception is raised.
+    """
     if router_attr_names is None:
         router_attr_names = ["router", "api_router"]
 
-    last_error = None
+    attempted_paths = []
     for path in module_paths:
         try:
             mod = importlib.import_module(path)
+            
             # 1. Check standard names ("router", "api_router")
             for attr in router_attr_names:
                 if hasattr(mod, attr):
                     return getattr(mod, attr)
-            # 2. Check path-derived name (e.g. "security_router")
+                    
+            # 2. Check path-derived name (e.g. "shares_router", "security_router")
             module_name = path.split(".")[-1]
             specific_attr = f"{module_name}_router"
             if hasattr(mod, specific_attr):
                 return getattr(mod, specific_attr)
-        except ImportError as err:
-            last_error = err
-            continue
 
-    raise ImportError(f"Could not load router from {module_paths}. Last error: {last_error}")
+        except ModuleNotFoundError as err:
+            # যদি সরাসরি ওই মডিউলটি না পাওয়া যায়, তবে পরবর্তী প্যাথ ট্রাই করবে
+            if err.name == path:
+                attempted_paths.append(path)
+                continue
+            # কিন্তু মডিউলটি আছে অথচ তার ভিতরের কোনো ইমপোর্ট মিসিং, তখন প্রকৃত এরর রেইজ করবে
+            raise err
+        except Exception as err:
+            raise err
+
+    raise ImportError(f"Could not load router from {module_paths}. Attempted modules: {attempted_paths}")
 
 
 # ── Defensive Router Imports ──
