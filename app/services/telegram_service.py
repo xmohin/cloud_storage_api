@@ -1,11 +1,14 @@
 """Advanced Telegram Storage Service with async queues, retry, and streaming."""
 
-import asyncio, os, time, uuid
+import asyncio
+import os
+import time
+import uuid
 from io import BytesIO
 from typing import Optional, Callable, AsyncGenerator, Dict, Any
 import aiofiles
-from cachetools import LRUCache
-from PIL import Image, UnidentifiedImageError
+from cachetools import LRUCache, TTLCache
+from PIL import Image
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError, RPCError
 from telethon.tl.custom import Message
@@ -18,11 +21,13 @@ from app.core.logger import get_logger
 settings = get_settings()
 logger = get_logger(__name__)
 
+
 class TaskStatus:
     QUEUED = "queued"
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+
 
 class TaskInfo:
     def __init__(self, task_id: str, task_type: str, file_path: str, message_id: int = None):
@@ -36,12 +41,14 @@ class TaskInfo:
         self.result = None
         self.created_at = time.time()
 
+
 class TelegramService:
     def __init__(self):
         self.client: Optional[TelegramClient] = None
         self.upload_queue: asyncio.Queue = asyncio.Queue()
         self.download_queue: asyncio.Queue = asyncio.Queue()
-        self.tasks: Dict[str, TaskInfo] = {}
+        # memory leak বন্ধ করার জন্য TTLCache (max size: 5000, TTL: 1 hour)
+        self.tasks: TTLCache = TTLCache(maxsize=5000, ttl=3600)
         self.message_cache: LRUCache = LRUCache(maxsize=1000)
         self._workers: list = []
         self._health_monitor_task: Optional[asyncio.Task] = None
@@ -65,7 +72,6 @@ class TelegramService:
         )
         await self.client.connect()
 
-        # <--- await যুক্ত করে RuntimeWarning সমাধান করা হলো --->
         if not await self.client.is_user_authorized():
             logger.error("Telegram session not authorized.")
             return
@@ -74,9 +80,9 @@ class TelegramService:
         for _ in range(2):
             self._workers.append(asyncio.create_task(self._upload_worker()))
             self._workers.append(asyncio.create_task(self._download_worker()))
-            
+
         self._health_monitor_task = asyncio.create_task(self._health_monitor())
-        logger.info("Telegram Service started.")
+        logger.info("Telegram Service started successfully.")
 
     async def stop(self):
         self._is_running = False
@@ -95,26 +101,33 @@ class TelegramService:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Health monitor error: {e}")
+                logger.error("telegram_health_monitor_error", error=str(e))
             await asyncio.sleep(30)
 
     def is_connected(self) -> bool:
         return self.client is not None and self.client.is_connected()
 
     async def _execute_with_retry(self, func, *args, max_retries=3, **kwargs):
+        last_error = None
         for attempt in range(max_retries):
             try:
                 return await func(*args, **kwargs)
             except FloodWaitError as e:
+                logger.warning("telegram_flood_wait", seconds=e.seconds)
                 await asyncio.sleep(e.seconds + 1)
-            except (RPCError, Exception):
+                last_error = e
+            except (RPCError, Exception) as e:
+                last_error = e
                 if attempt == max_retries - 1:
                     raise
                 await asyncio.sleep(2 ** attempt)
+        if last_error:
+            raise last_error
+        raise RuntimeError(f"Operation failed after {max_retries} attempts")
 
     def _get_progress_callback(self, task: TaskInfo) -> Callable:
         def callback(current: int, total: int):
-            task.progress = current / total if total > 0 else 0.0
+            task.progress = round(current / total, 4) if total > 0 else 0.0
         return callback
 
     def _extract_thumbnail(self, file_path: str) -> Optional[bytes]:
@@ -164,7 +177,10 @@ class TelegramService:
 
     async def _upload_worker(self):
         while self._is_running:
-            task: TaskInfo = await self.upload_queue.get()
+            try:
+                task: TaskInfo = await self.upload_queue.get()
+            except asyncio.CancelledError:
+                break
             if not task:
                 continue
             task.status = TaskStatus.PROCESSING
@@ -193,7 +209,10 @@ class TelegramService:
 
     async def _download_worker(self):
         while self._is_running:
-            task: TaskInfo = await self.download_queue.get()
+            try:
+                task: TaskInfo = await self.download_queue.get()
+            except asyncio.CancelledError:
+                break
             if not task:
                 continue
             task.status = TaskStatus.PROCESSING
@@ -201,9 +220,18 @@ class TelegramService:
                 message = await self._get_message(task.message_id)
                 if not message or not message.media:
                     raise ValueError("Media not found")
+
+                total_bytes = getattr(message, "file", None)
+                total_size = total_bytes.size if total_bytes else 0
+                downloaded = 0
+
                 async with aiofiles.open(task.file_path, 'wb') as f:
                     async for chunk in self.client.iter_download(message.media, request_size=1024 * 1024):
                         await f.write(chunk)
+                        downloaded += len(chunk)
+                        if total_size > 0:
+                            task.progress = round(downloaded / total_size, 4)
+
                 task.status = TaskStatus.COMPLETED
                 task.progress = 1.0
             except Exception as e:
@@ -232,7 +260,8 @@ class TelegramService:
             await asyncio.sleep(e.seconds + 1)
             raise
         except Exception as e:
-            logger.error(f"Stream error: {e}")
+            logger.error("stream_download_error", error=str(e))
             raise
+
 
 telegram_service = TelegramService()
