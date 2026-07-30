@@ -67,9 +67,12 @@ class Database:
         await db.files.create_index("deleted_expires_at", expireAfterSeconds=0, name="idx_trash_ttl")
         await db.tokens.create_index("jti", unique=True)
         await db.tokens.create_index("expires_at", expireAfterSeconds=0)
-        await db.sessions.create_index("user_id")
+        
+        # Updated session index with unique=True and sparse=True
+        await db.sessions.create_index("user_id", unique=True, sparse=True)
         await db.sessions.create_index("refresh_jti", unique=True)
         await db.sessions.create_index("expires_at", expireAfterSeconds=0)
+        
         await db.blacklist.create_index("jti", unique=True)
         await db.blacklist.create_index("expires_at", expireAfterSeconds=0)
         await db.uploads.create_index("user_id")
