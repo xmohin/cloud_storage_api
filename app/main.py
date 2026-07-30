@@ -1,54 +1,70 @@
-import asyncio
+"""Gallery Vault API — application entry point."""
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from app.core.config import settings
-from app.core.database import connect_to_mongo, close_mongo_connection
-from app.core.middleware import EnterpriseSecurityMiddleware
+
+from app import __version__
+from app.core.config import get_settings
+from app.core.database import db, email_client
 from app.services.telegram_service import telegram_service
-from app.services.background import start_background_tasks
-from app.api import auth, upload, files, folders, shares, trash, stats, admin
+from app.services.upload_service import upload_service
+from app.services.email_service import email_service
+from app.core.logger import configure_logging, get_logger
+from app.core.middleware import setup_exception_handlers, setup_middleware, limiter
+from app.models.schemas import HealthResponse
+from app.api.v1.auth import router as auth_router
+from app.api.v1.uploads import router as uploads_router
+from app.api.v1.files import router as files_router
+from app.api.v1.shares import router as shares_router
+
+settings = get_settings()
+configure_logging()
+logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup tasks
-    await connect_to_mongo()
+    logger.info("Starting Gallery Vault API", version=__version__, env=settings.APP_ENV)
+    await db.connect()
     await telegram_service.start()
-    bg_task = asyncio.create_task(start_background_tasks())
+    await upload_service.start()
+    await email_client.connect()
+    await email_service.start()
     yield
-    # Shutdown tasks
-    bg_task.cancel()
+    logger.info("Shutting down Gallery Vault API")
+    await email_service.stop()
+    await email_client.disconnect()
+    await upload_service.stop()
     await telegram_service.stop()
-    await close_mongo_connection()
+    await db.disconnect()
 
-app = FastAPI(
-    title=settings.APP_NAME,
-    version="2.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    lifespan=lifespan
-)
+def create_app() -> FastAPI:
+    app = FastAPI(
+        title=settings.APP_NAME,
+        version=__version__,
+        docs_url="/docs" if not settings.is_production else None,
+        redoc_url="/redoc" if not settings.is_production else None,
+        openapi_url="/openapi.json" if not settings.is_production else None,
+        lifespan=lifespan,
+    )
+    app.state.limiter = limiter
+    setup_middleware(app)
+    setup_exception_handlers(app)
 
-# Custom Middlewares
-app.add_middleware(EnterpriseSecurityMiddleware)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    @app.get("/health", response_model=HealthResponse, tags=["System"])
+    async def health_check() -> HealthResponse:
+        mongo_ok = await db.health_check()
+        tg_ok = telegram_service.is_connected()
+        services = {
+            "mongodb": "healthy" if mongo_ok else "unhealthy",
+            "telegram": "healthy" if tg_ok else "unhealthy",
+            "brevo": "healthy" if email_client._http is not None else "degraded",
+        }
+        return HealthResponse(status="healthy" if mongo_ok else "degraded", version=__version__, services=services)
 
-# Register API Routers
-app.include_router(auth.router)
-app.include_router(upload.router)
-app.include_router(files.router)
-app.include_router(folders.router)
-app.include_router(shares.router)
-app.include_router(trash.router)
-app.include_router(stats.router)
-app.include_router(admin.router)
+    app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(uploads_router, prefix="/api/v1")
+    app.include_router(files_router, prefix="/api/v1")
+    app.include_router(shares_router, prefix="/api/v1")
+    return app
 
-@app.get("/health", tags=["Health Check"])
-async def health_check():
-    return {"status": "healthy", "environment": settings.ENVIRONMENT}
+app = create_app()
