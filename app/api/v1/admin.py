@@ -1,4 +1,4 @@
-# app/api/v1/admin.py
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from app.api.dependencies import DatabaseDep, AdminUserDep
 from app.models.schemas import ApiResponse, AdminUserUpdate, UserRole
@@ -25,7 +25,7 @@ async def get_user(user_id: str, admin: AdminUserDep, db: DatabaseDep):
 
 @router.put("/user/{user_id}")
 async def update_user(user_id: str, payload: AdminUserUpdate, admin: AdminUserDep, db: DatabaseDep):
-    update_data = payload.dict(exclude_unset=True)
+    update_data = payload.model_dump(exclude_unset=True)
     if "role" in update_data: update_data["role"] = update_data["role"].value
     await db.users.update_one({"_id": user_id}, {"$set": update_data})
     return ApiResponse(message="User updated")
@@ -47,7 +47,6 @@ async def delete_file(file_id: str, admin: AdminUserDep, db: DatabaseDep):
 
 @router.get("/logs")
 async def get_logs(admin: AdminUserDep, db: DatabaseDep):
-    # Fetch from a logs collection if exists
     return ApiResponse(data=[])
 
 @router.get("/statistics")
