@@ -11,7 +11,6 @@ from app.services.upload_service import upload_service
 from app.services.email_service import email_service
 from app.core.logger import configure_logging, get_logger
 from app.core.middleware import setup_exception_handlers, setup_middleware, limiter
-from app.models.schemas import HealthResponse
 
 # Import all routers
 from app.api.v1.auth import router as auth_router
@@ -31,21 +30,44 @@ settings = get_settings()
 configure_logging()
 logger = get_logger(__name__)
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting Gallery Vault API", version=__version__, env=settings.APP_ENV)
-    await db.connect()
-    await telegram_service.start()
-    await upload_service.start()
-    await email_client.connect()
-    await email_service.start()
+    
+    # ── Startup Phase ──
+    try:
+        await db.connect()
+        await telegram_service.start()
+        await upload_service.start()
+        await email_client.connect()
+        await email_service.start()
+        logger.info("All background services initialized successfully.")
+    except Exception as e:
+        logger.critical(f"Failed to start services during startup: {e}")
+        raise e
+
     yield
-    logger.info("Shutting down Gallery Vault API")
-    await email_service.stop()
-    await email_client.disconnect()
-    await upload_service.stop()
-    await telegram_service.stop()
-    await db.disconnect()
+
+    # ── Shutdown Phase ──
+    logger.info("Shutting down Gallery Vault API...")
+    
+    # Each cleanup step is executed safely
+    for service_name, stop_coro in [
+        ("Email Service", email_service.stop()),
+        ("Email Client", email_client.disconnect()),
+        ("Upload Service", upload_service.stop()),
+        ("Telegram Service", telegram_service.stop()),
+        ("Database Connection", db.disconnect()),
+    ]:
+        try:
+            await stop_coro
+            logger.info(f"{service_name} stopped successfully.")
+        except Exception as e:
+            logger.error(f"Error stopping {service_name}: {e}")
+
+    logger.info("Application shutdown complete.")
+
 
 def create_app() -> FastAPI:
     app = FastAPI(
@@ -56,6 +78,8 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json" if not settings.is_production else None,
         lifespan=lifespan,
     )
+
+    # Attach rate limiter state & setup global middlewares/handlers
     app.state.limiter = limiter
     setup_middleware(app)
     setup_exception_handlers(app)
@@ -73,7 +97,8 @@ def create_app() -> FastAPI:
     app.include_router(notifications_router, prefix="/api/v1")
     app.include_router(admin_router, prefix="/api/v1")
     app.include_router(security_router, prefix="/api/v1")
-    
+
     return app
+
 
 app = create_app()
