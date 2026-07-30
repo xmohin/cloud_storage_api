@@ -1,34 +1,112 @@
-"""Sharing API endpoints."""
+"""Share link management endpoints."""
 
-from fastapi import APIRouter, Request, status, HTTPException
-from fastapi.responses import StreamingResponse
+from datetime import datetime, timezone
+from uuid import uuid4
+from fastapi import APIRouter, status
+from fastapi.responses import JSONResponse
 from app.api.dependencies import CurrentUserDep, DatabaseDep
-from app.services.share_service import share_service
-from app.services.telegram_service import telegram_service
-from app.core.config import get_settings
-from app.models.schemas import ApiResponse, ShareCreateRequest, ShareAccessRequest, ShareResponse
+from app.core.security import security
+from app.models.schemas import (
+    ApiResponse,
+    ShareCreateRequest,
+    ShareAccessRequest,
+    ShareResponse,
+    FileMetadata,
+)
 
-settings = get_settings()
-router = APIRouter(prefix="/shares", tags=["File Sharing"])
+router = APIRouter(prefix="/shares", tags=["Share Links"])
+
+
+def _ensure_tz_aware(dt: datetime | None) -> datetime | None:
+    if dt and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-async def create_share_link(payload: ShareCreateRequest, user: CurrentUserDep, db: DatabaseDep):
-    share_doc = await share_service.create_share(db, user["_id"], payload.file_id, payload.password, payload.expires_in_hours, payload.max_downloads)
-    share_doc["share_url"] = f"{settings.APP_BASE_URL}/api/v1/shares/access/{share_doc['share_token']}"
+async def create_share(payload: ShareCreateRequest, user: CurrentUserDep, db: DatabaseDep):
+    file_doc = await db.files.find_one({"_id": payload.file_id, "owner_id": user["_id"], "deleted_at": None})
+    if not file_doc:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"success": False, "message": "File or folder not found"}
+        )
+
+    share_code = security.generate_share_code()
+    password_hash = security.hash_password(payload.password) if payload.password else None
+
+    share_doc = {
+        "_id": str(uuid4()),
+        "share_code": share_code,
+        "file_id": payload.file_id,
+        "created_by": user["_id"],
+        "password_hash": password_hash,
+        "expires_at": payload.expires_at,
+        "max_downloads": payload.max_downloads,
+        "download_count": 0,
+        "created_at": datetime.now(timezone.utc),
+        "is_active": True
+    }
+
+    await db.shares.insert_one(share_doc)
     return ApiResponse(data=ShareResponse(**share_doc))
 
-@router.post("/access/{share_token}")
-async def access_shared_file(share_token: str, payload: ShareAccessRequest, request: Request, db: DatabaseDep):
-    ip, ua = request.client.host if request.client else "Unknown", request.headers.get("User-Agent", "Unknown")
-    file_doc = await share_service.verify_and_access_share(db, share_token, payload.password, ip, ua)
-    if not file_doc.get("telegram_message_id"): raise HTTPException(status.HTTP_404_NOT_FOUND, detail="File content not available")
-    return StreamingResponse(telegram_service.stream_download(file_doc["telegram_message_id"]), media_type=file_doc.get("mime_type", "application/octet-stream"))
 
-@router.delete("/{share_token}")
-async def revoke_share_link(share_token: str, user: CurrentUserDep, db: DatabaseDep):
-    await share_service.revoke_share(db, share_token, user["_id"])
-    return ApiResponse(message="Share link revoked")
+@router.post("/{code}/access")
+async def access_share(code: str, payload: ShareAccessRequest, db: DatabaseDep):
+    share = await db.shares.find_one({"share_code": code, "is_active": True})
+    if not share:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"success": False, "message": "Share link not found or expired"}
+        )
 
-@router.get("/{share_token}/analytics")
-async def get_share_analytics(share_token: str, user: CurrentUserDep, db: DatabaseDep):
-    return ApiResponse(data=await share_service.get_analytics(db, share_token, user["_id"]))
+    # Expiry Check
+    expires_at = _ensure_tz_aware(share.get("expires_at"))
+    if expires_at and datetime.now(timezone.utc) > expires_at:
+        await db.shares.update_one({"_id": share["_id"]}, {"$set": {"is_active": False}})
+        return JSONResponse(
+            status_code=status.HTTP_410_GONE,
+            content={"success": False, "message": "Share link has expired"}
+        )
+
+    # Max Downloads Limit Check
+    if share.get("max_downloads") and share["download_count"] >= share["max_downloads"]:
+        return JSONResponse(
+            status_code=status.HTTP_410_GONE,
+            content={"success": False, "message": "Download limit reached"}
+        )
+
+    # Password Check
+    if share.get("password_hash"):
+        if not payload.password or not security.verify_password(payload.password, share["password_hash"]):
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"success": False, "message": "Password required or incorrect"}
+            )
+
+    file_doc = await db.files.find_one({"_id": share["file_id"], "deleted_at": None})
+    if not file_doc:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"success": False, "message": "Shared file no longer exists"}
+        )
+
+    # Increment download/access count
+    await db.shares.update_one({"_id": share["_id"]}, {"$inc": {"download_count": 1}})
+
+    return ApiResponse(data=FileMetadata(**file_doc))
+
+
+@router.delete("/{share_id}")
+async def revoke_share(share_id: str, user: CurrentUserDep, db: DatabaseDep):
+    res = await db.shares.update_one(
+        {"_id": share_id, "created_by": user["_id"]},
+        {"$set": {"is_active": False}}
+    )
+    if res.modified_count == 0:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"success": False, "message": "Share link not found"}
+        )
+    return ApiResponse(message="Share link revoked successfully")
