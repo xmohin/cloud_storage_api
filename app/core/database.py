@@ -68,6 +68,12 @@ class Database:
         await db.tokens.create_index("jti", unique=True)
         await db.tokens.create_index("expires_at", expireAfterSeconds=0)
         
+        # Drop the old conflicting index if it exists
+        try:
+            await db.sessions.drop_index("user_id_1")
+        except Exception:
+            pass
+            
         # Updated session index with unique=True and sparse=True
         await db.sessions.create_index("user_id", unique=True, sparse=True)
         await db.sessions.create_index("refresh_jti", unique=True)
