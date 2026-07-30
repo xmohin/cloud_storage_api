@@ -45,6 +45,14 @@ class FileService:
         return {"files": files, "total": total}
 
     @staticmethod
+    async def list_by_type(db: AsyncIOMotorDatabase, user_id: str, file_type: FileType, skip: int, limit: int) -> dict:
+        """List files filtered by a specific FileType enum."""
+        query = {"owner_id": user_id, "deleted_at": None, "is_folder": False, "file_type": file_type.value}
+        files = await db.files.find(query).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+        total = await db.files.count_documents(query)
+        return {"files": files, "total": total}
+
+    @staticmethod
     async def search_files(db: AsyncIOMotorDatabase, user_id: str, query_str: str, skip: int, limit: int) -> dict:
         query = {"owner_id": user_id, "deleted_at": None, "$text": {"$search": query_str}}
         files = await db.files.find(query, {"score": {"$meta": "textScore"}}).sort([("score", {"$meta": "textScore"})]).skip(skip).limit(limit).to_list(limit)
@@ -55,7 +63,8 @@ class FileService:
     async def rename_file(db: AsyncIOMotorDatabase, file_id: str, user_id: str, new_name: str) -> dict:
         file_doc = await FileService._get_file_doc(db, file_id, user_id)
         await db.files.update_one({"_id": file_id}, {"$set": {"original_name": new_name, "updated_at": datetime.now(timezone.utc)}})
-        file_doc["original_name"] = new_name; return file_doc
+        file_doc["original_name"] = new_name
+        return file_doc
 
     @staticmethod
     async def move_file(db: AsyncIOMotorDatabase, file_id: str, user_id: str, new_parent_id: Optional[str]) -> dict:
@@ -70,22 +79,62 @@ class FileService:
                     p_doc = await db.files.find_one({"_id": parent_check, "owner_id": user_id}, {"parent_id": 1})
                     parent_check = p_doc.get("parent_id") if p_doc else None
         await db.files.update_one({"_id": file_id}, {"$set": {"parent_id": new_parent_id, "updated_at": datetime.now(timezone.utc)}})
-        file_doc["parent_id"] = new_parent_id; return file_doc
+        file_doc["parent_id"] = new_parent_id
+        return file_doc
+
+    @staticmethod
+    async def copy_file(db: AsyncIOMotorDatabase, file_id: str, user_id: str, new_parent_id: Optional[str]) -> dict:
+        """Creates a duplicate metadata record pointing to the same Telegram message ID."""
+        file_doc = await FileService._get_file_doc(db, file_id, user_id)
+        
+        # Create a new document with a new ID but same content reference
+        new_doc = file_doc.copy()
+        new_doc["_id"] = str(uuid.uuid4())
+        new_doc["parent_id"] = new_parent_id
+        new_doc["original_name"] = f"Copy of {file_doc['original_name']}"
+        new_doc["is_favorite"] = False
+        new_doc["created_at"] = datetime.now(timezone.utc)
+        new_doc["updated_at"] = datetime.now(timezone.utc)
+        new_doc.pop("deleted_at", None)
+        new_doc.pop("deleted_expires_at", None)
+        
+        await db.files.insert_one(new_doc)
+        
+        # Increment user storage since we are duplicating the file reference
+        if not new_doc.get("is_folder"):
+            await db.users.update_one({"_id": user_id}, {"$inc": {"storage_used_bytes": new_doc.get("size_bytes", 0)}})
+            
+        return new_doc
 
     @staticmethod
     async def toggle_favorite(db: AsyncIOMotorDatabase, file_id: str, user_id: str) -> dict:
         file_doc = await FileService._get_file_doc(db, file_id, user_id)
         new_state = not file_doc.get("is_favorite", False)
         await db.files.update_one({"_id": file_id}, {"$set": {"is_favorite": new_state, "updated_at": datetime.now(timezone.utc)}})
-        file_doc["is_favorite"] = new_state; return file_doc
+        file_doc["is_favorite"] = new_state
+        return file_doc
 
     @staticmethod
     async def create_folder(db: AsyncIOMotorDatabase, user_id: str, name: str, parent_id: Optional[str]) -> dict:
         if parent_id:
             parent_doc = await FileService._get_file_doc(db, parent_id, user_id)
             if not parent_doc.get("is_folder"): raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Parent must be a folder")
-        folder_doc = {"_id": str(uuid.uuid4()), "owner_id": user_id, "parent_id": parent_id, "original_name": name, "file_type": FileType.FOLDER, "is_folder": True, "is_favorite": False, "size_bytes": 0, "status": FileStatus.COMPLETED, "deleted_at": None, "created_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}
-        await db.files.insert_one(folder_doc); return folder_doc
+        folder_doc = {
+            "_id": str(uuid.uuid4()), 
+            "owner_id": user_id, 
+            "parent_id": parent_id, 
+            "original_name": name, 
+            "file_type": FileType.FOLDER, 
+            "is_folder": True, 
+            "is_favorite": False, 
+            "size_bytes": 0, 
+            "status": FileStatus.COMPLETED, 
+            "deleted_at": None, 
+            "created_at": datetime.now(timezone.utc), 
+            "updated_at": datetime.now(timezone.utc)
+        }
+        await db.files.insert_one(folder_doc)
+        return folder_doc
 
     @staticmethod
     async def move_to_trash(db: AsyncIOMotorDatabase, file_id: str, user_id: str) -> dict:
@@ -94,7 +143,8 @@ class FileService:
         deleted_at = datetime.now(timezone.utc)
         await db.files.update_one({"_id": file_id}, {"$set": {"deleted_at": deleted_at, "deleted_expires_at": deleted_at + timedelta(days=TRASH_EXPIRY_DAYS), "updated_at": deleted_at}})
         if not file_doc.get("is_folder"): await db.users.update_one({"_id": user_id}, {"$inc": {"storage_used_bytes": -file_doc.get("size_bytes", 0)}})
-        file_doc["deleted_at"] = deleted_at; return file_doc
+        file_doc["deleted_at"] = deleted_at
+        return file_doc
 
     @staticmethod
     async def _recursive_trash(db: AsyncIOMotorDatabase, folder_id: str, user_id: str):
@@ -122,7 +172,8 @@ class FileService:
             if parent and parent.get("deleted_at"): await FileService.restore_from_trash(db, parent_id, user_id)
         await db.files.update_one({"_id": file_id}, {"$set": {"deleted_at": None, "deleted_expires_at": None, "updated_at": datetime.now(timezone.utc)}})
         if not file_doc.get("is_folder"): await db.users.update_one({"_id": user_id}, {"$inc": {"storage_used_bytes": file_doc.get("size_bytes", 0)}})
-        file_doc["deleted_at"] = None; return file_doc
+        file_doc["deleted_at"] = None
+        return file_doc
 
     @staticmethod
     async def permanent_delete(db: AsyncIOMotorDatabase, file_id: str, user_id: str):
@@ -156,8 +207,17 @@ class FileService:
         quota, used = user.get("storage_quota_bytes", 0), user.get("storage_used_bytes", 0)
         pipeline = [{"$match": {"owner_id": user_id, "deleted_at": None, "is_folder": False}}, {"$group": {"_id": "$file_type", "count": {"$sum": 1}}}]
         type_counts = {doc["_id"]: doc["count"] async for doc in db.files.aggregate(pipeline)}
-        total_files, total_folders = sum(type_counts.values()), await db.files.count_documents({"owner_id": user_id, "deleted_at": None, "is_folder": True})
+        total_files = sum(type_counts.values())
+        total_folders = await db.files.count_documents({"owner_id": user_id, "deleted_at": None, "is_folder": True})
         trash_count = await db.files.count_documents({"owner_id": user_id, "deleted_at": {"$ne": None}})
-        return {"total_files": total_files, "total_folders": total_folders, "total_size_bytes": used, "storage_quota_bytes": quota, "storage_used_percentage": round((used / quota) * 100, 2) if quota > 0 else 0.0, "files_by_type": type_counts, "trash_count": trash_count}
+        return {
+            "total_files": total_files, 
+            "total_folders": total_folders, 
+            "total_size_bytes": used, 
+            "storage_quota_bytes": quota, 
+            "storage_used_percentage": round((used / quota) * 100, 2) if quota > 0 else 0.0, 
+            "files_by_type": type_counts, 
+            "trash_count": trash_count
+        }
 
 file_service = FileService()
