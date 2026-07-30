@@ -5,8 +5,14 @@ from typing import List
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", 
+        env_file_encoding="utf-8", 
+        case_sensitive=False, 
+        extra="ignore"
+    )
 
     APP_NAME: str = "Gallery Vault"
     APP_ENV: str = "development"
@@ -27,6 +33,8 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    JWT_ISSUER: str = "gallery-vault"
+    JWT_AUDIENCE: str = "gallery-vault-users"
 
     TELEGRAM_API_ID: int = 0
     TELEGRAM_API_HASH: str = ""
@@ -63,14 +71,29 @@ class Settings(BaseSettings):
     @field_validator("APP_DEBUG", "CORS_ALLOW_CREDENTIALS", "RATE_LIMIT_ENABLED", mode="before")
     @classmethod
     def _parse_bool(cls, v: object) -> bool:
-        if isinstance(v, str): return v.strip().lower() in ("true", "1", "yes")
+        if isinstance(v, str):
+            return v.strip().lower() in ("true", "1", "yes")
         return bool(v)
 
-    @field_validator("APP_PORT", "MONGODB_MAX_POOL_SIZE", "MONGODB_MIN_POOL_SIZE", "MONGODB_MAX_IDLE_TIME_MS", "MONGODB_SERVER_SELECTION_TIMEOUT_MS", "JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "JWT_REFRESH_TOKEN_EXPIRE_DAYS", "BCRYPT_ROUNDS", "TELEGRAM_API_ID", "TELEGRAM_STORAGE_CHANNEL_ID", mode="before")
+    @field_validator(
+        "APP_PORT",
+        "MONGODB_MAX_POOL_SIZE",
+        "MONGODB_MIN_POOL_SIZE",
+        "MONGODB_MAX_IDLE_TIME_MS",
+        "MONGODB_SERVER_SELECTION_TIMEOUT_MS",
+        "JWT_ACCESS_TOKEN_EXPIRE_MINUTES",
+        "JWT_REFRESH_TOKEN_EXPIRE_DAYS",
+        "BCRYPT_ROUNDS",
+        "TELEGRAM_API_ID",
+        "TELEGRAM_STORAGE_CHANNEL_ID",
+        mode="before",
+    )
     @classmethod
     def _parse_int(cls, v: object) -> int:
-        if isinstance(v, str): return int(v)
+        if isinstance(v, str):
+            return int(v)
         return int(v)
+
 
 @lru_cache
 def get_settings() -> Settings:
