@@ -21,7 +21,8 @@ FROM python:3.12-slim AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/usr/local/lib/python3.12/site-packages
 
 RUN groupadd -r appuser \
     && useradd -r -g appuser -d /app -s /sbin/nologin appuser
@@ -32,14 +33,15 @@ COPY --from=builder /install /usr/local
 COPY --chown=appuser:appuser . .
 
 # Create temp directory for chunked uploads
-RUN mkdir -p /app/tmp_uploads && chown appuser:appuser /app/tmp_uploads
+RUN mkdir -p /app/tmp_uploads && chown -R appuser:appuser /app/tmp_uploads
 
 USER appuser
 
 EXPOSE 8000
 
+# Fixed Healthcheck URL to match API v1 route prefix
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:${PORT:-8000}/health').status==200 else sys.exit(1)"
+    CMD python -c "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:${PORT:-8000}/api/v1/health').status==200 else sys.exit(1)"
 
 CMD ["sh", "-c", "gunicorn app.main:app \
     --worker-class uvicorn.workers.UvicornWorker \
