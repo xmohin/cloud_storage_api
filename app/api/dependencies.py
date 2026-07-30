@@ -1,8 +1,8 @@
 """FastAPI dependencies shared across route handlers."""
 
-from typing import Annotated
+from typing import Annotated, Any
+import jwt
 from fastapi import Depends, HTTPException, Query, status
-from fastapi.security import OAuth2PasswordBearer
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.core.database import db
@@ -19,17 +19,23 @@ async def get_database() -> AsyncIOMotorDatabase:
 async def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)],
     database: Annotated[AsyncIOMotorDatabase, Depends(get_database)],
-) -> dict:
-    payload = security.decode_token(token, expected_type="access")
+) -> dict[str, Any]:
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials or token expired",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    try:
+        payload = security.decode_token(token, expected_type="access")
+    except (jwt.PyJWTError, ValueError):
+        raise credentials_exception
+
     user_id = payload.get("sub")
     jti = payload.get("jti")
     
     if not user_id or not jti:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token missing required claims",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise credentials_exception
         
     blacklisted = await database.blacklist.find_one({"jti": jti})
     if blacklisted:
@@ -59,20 +65,22 @@ async def get_current_user(
 
 # Database & User Dependencies
 DatabaseDep = Annotated[AsyncIOMotorDatabase, Depends(get_database)]
-CurrentUserDep = Annotated[dict, Depends(get_current_user)]
+CurrentUserDep = Annotated[dict[str, Any], Depends(get_current_user)]
 
 
 # <--- Admin Check Function & Dependency --->
-async def get_admin_user(current_user: CurrentUserDep) -> dict:
-    user_role = current_user.get("role")
-    if user_role != UserRole.ADMIN and user_role != UserRole.ADMIN.value and user_role != "admin":
+async def get_admin_user(current_user: CurrentUserDep) -> dict[str, Any]:
+    user_role = str(current_user.get("role", "")).lower()
+    admin_val = str(UserRole.ADMIN.value if hasattr(UserRole.ADMIN, "value") else UserRole.ADMIN).lower()
+
+    if user_role not in (admin_val, "admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin privileges required",
         )
     return current_user
 
-AdminUserDep = Annotated[dict, Depends(get_admin_user)]
+AdminUserDep = Annotated[dict[str, Any], Depends(get_admin_user)]
 
 
 class PaginationParams:
@@ -94,6 +102,14 @@ class PaginationParams:
         return {self.sort_by: 1 if self.sort_order == "asc" else -1}
 
 
-TelegramServiceDep = Annotated[object, Depends(lambda: telegram_service)]
-EmailServiceDep = Annotated[object, Depends(lambda: email_service)]
+def get_telegram_service():
+    return telegram_service
+
+
+def get_email_service():
+    return email_service
+
+
+TelegramServiceDep = Annotated[Any, Depends(get_telegram_service)]
+EmailServiceDep = Annotated[Any, Depends(get_email_service)]
 PaginationDep = Annotated[PaginationParams, Depends()]
