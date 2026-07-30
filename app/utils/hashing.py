@@ -1,15 +1,20 @@
 import hashlib
 import secrets
+import aiofiles
 
-def compute_stream_sha256(file_path: str) -> str:
+
+async def compute_stream_sha256(file_path: str) -> str:
+    """Async SHA-256 hash calculator to prevent blocking the event loop."""
     sha256_hash = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        for byte_block in iter(lambda: f.read(65536), b""):
-            sha256_hash.update(byte_block)
+    async with aiofiles.open(file_path, "rb") as f:
+        while chunk := await f.read(65536):
+            sha256_hash.update(chunk)
     return sha256_hash.hexdigest()
+
 
 def generate_random_token(length: int = 32) -> str:
     return secrets.token_urlsafe(length)
 
+
 def generate_otp() -> str:
-    return f"{secrets.randbelow(900000) + 100000}"
+    return f"{secrets.randbelow(900000) + 100000:06d}"
