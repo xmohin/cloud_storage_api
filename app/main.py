@@ -12,10 +12,20 @@ from app.services.email_service import email_service
 from app.core.logger import configure_logging, get_logger
 from app.core.middleware import setup_exception_handlers, setup_middleware, limiter
 from app.models.schemas import HealthResponse
+
+# Import all routers
 from app.api.v1.auth import router as auth_router
-from app.api.v1.uploads import router as uploads_router
+from app.api.v1.user import router as user_router
 from app.api.v1.files import router as files_router
-from app.api.v1.shares import router as shares_router
+from app.api.v1.folders import router as folders_router
+from app.api.v1.search import router as search_router
+from app.api.v1.share import router as share_router
+from app.api.v1.backup import router as backup_router
+from app.api.v1.storage import router as storage_router
+from app.api.v1.notifications import router as notifications_router
+from app.api.v1.admin import router as admin_router
+from app.api.v1.security import router as security_router
+from app.api.v1.system import router as system_router
 
 settings = get_settings()
 configure_logging()
@@ -50,21 +60,20 @@ def create_app() -> FastAPI:
     setup_middleware(app)
     setup_exception_handlers(app)
 
-    @app.get("/health", response_model=HealthResponse, tags=["System"])
-    async def health_check() -> HealthResponse:
-        mongo_ok = await db.health_check()
-        tg_ok = telegram_service.is_connected()
-        services = {
-            "mongodb": "healthy" if mongo_ok else "unhealthy",
-            "telegram": "healthy" if tg_ok else "unhealthy",
-            "brevo": "healthy" if email_client._http is not None else "degraded",
-        }
-        return HealthResponse(status="healthy" if mongo_ok else "degraded", version=__version__, services=services)
-
+    # ── API Routers ──
+    app.include_router(system_router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api/v1")
-    app.include_router(uploads_router, prefix="/api/v1")
+    app.include_router(user_router, prefix="/api/v1")
     app.include_router(files_router, prefix="/api/v1")
-    app.include_router(shares_router, prefix="/api/v1")
+    app.include_router(folders_router, prefix="/api/v1")
+    app.include_router(search_router, prefix="/api/v1")
+    app.include_router(share_router, prefix="/api/v1")
+    app.include_router(backup_router, prefix="/api/v1")
+    app.include_router(storage_router, prefix="/api/v1")
+    app.include_router(notifications_router, prefix="/api/v1")
+    app.include_router(admin_router, prefix="/api/v1")
+    app.include_router(security_router, prefix="/api/v1")
+    
     return app
 
 app = create_app()
