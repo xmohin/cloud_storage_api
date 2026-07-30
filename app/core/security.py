@@ -1,29 +1,67 @@
+"""Security utilities — JWT tokens, password hashing, and OTPs."""
+
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any
+from typing import Any
+from uuid import uuid4
+import secrets
 import jwt
+from fastapi import HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
-from app.core.config import settings
+from app.core.config import get_settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+settings = get_settings()
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=settings.BCRYPT_ROUNDS)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
-def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+class SecurityManager:
+    @staticmethod
+    def hash_password(password: str) -> str:
+        return pwd_context.hash(password)
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    @staticmethod
+    def verify_password(plain_password: str, hashed_password: str) -> bool:
+        return pwd_context.verify(plain_password, hashed_password)
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode.update({"exp": expire, "type": "access"})
-    return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.ALGORITHM)
+    @staticmethod
+    def create_access_token(subject: str, extra_claims: dict[str, Any] | None = None) -> tuple[str, str]:
+        now = datetime.now(timezone.utc)
+        expire = now + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+        jti = str(uuid4())
+        payload: dict[str, Any] = {"sub": subject, "iat": now, "exp": expire, "iss": settings.JWT_ISSUER, "aud": settings.JWT_AUDIENCE, "type": "access", "jti": jti}
+        if extra_claims: payload.update(extra_claims)
+        return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM), jti
 
-def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS))
-    to_encode.update({"exp": expire, "type": "refresh"})
-    return jwt.encode(to_encode, settings.JWT_REFRESH_SECRET_KEY, algorithm=settings.ALGORITHM)
+    @staticmethod
+    def create_refresh_token(subject: str) -> tuple[str, str]:
+        now = datetime.now(timezone.utc)
+        expire = now + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
+        jti = str(uuid4())
+        payload: dict[str, Any] = {"sub": subject, "iat": now, "exp": expire, "iss": settings.JWT_ISSUER, "aud": settings.JWT_AUDIENCE, "type": "refresh", "jti": jti}
+        return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM), jti
 
-def decode_token(token: str, is_refresh: bool = False) -> Dict[str, Any]:
-    secret = settings.JWT_REFRESH_SECRET_KEY if is_refresh else settings.JWT_SECRET_KEY
-    return jwt.decode(token, secret, algorithms=[settings.ALGORITHM])
+    @staticmethod
+    def decode_token(token: str, expected_type: str | None = None) -> dict[str, Any]:
+        try:
+            payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM], issuer=settings.JWT_ISSUER, audience=settings.JWT_AUDIENCE)
+        except jwt.ExpiredSignatureError:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has expired", headers={"WWW-Authenticate": "Bearer"})
+        except jwt.InvalidTokenError:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token", headers={"WWW-Authenticate": "Bearer"})
+        if expected_type and payload.get("type") != expected_type:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Expected {expected_type} token", headers={"WWW-Authenticate": "Bearer"})
+        return payload
+
+    @staticmethod
+    def generate_otp() -> str:
+        return f"{secrets.randbelow(1000000):06d}"
+
+    @staticmethod
+    def hash_otp(otp: str) -> str:
+        return pwd_context.hash(otp)
+
+    @staticmethod
+    def verify_otp(plain_otp: str, hashed_otp: str) -> bool:
+        return pwd_context.verify(plain_otp, hashed_otp)
+
+security = SecurityManager()
