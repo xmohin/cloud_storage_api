@@ -8,14 +8,16 @@ from fastapi import UploadFile, HTTPException, status
 
 from app.core.config import get_settings
 from app.core.database import db
-from app.core.logger import get_logger  # <--- এটি মিসিং ছিল
+from app.core.logger import get_logger
 from app.services.telegram_service import telegram_service
 from app.models.schemas import FileType
 
 settings = get_settings()
 logger = get_logger(__name__)
 CHUNK_SIZE = 5 * 1024 * 1024  
-TEMP_UPLOAD_DIR = "/app/tmp_uploads"
+
+# <--- /tmp ফোল্ডার ব্যবহার করে PermissionError সমাধান করা হলো --->
+TEMP_UPLOAD_DIR = "/tmp/tmp_uploads"
 
 class UploadService:
     def __init__(self): 
@@ -175,7 +177,7 @@ class UploadService:
         return {
             "upload_id": upload_id, 
             "status": upload["status"], 
-            "received_chunks": upload.get("received_chunks", []),  # <--- KeyError এড়াতে .get() ব্যবহার করা হয়েছে
+            "received_chunks": upload.get("received_chunks", []), 
             "total_chunks": upload.get("total_chunks", 0), 
             "progress": progress, 
             "file_id": upload.get("file_id"), 
