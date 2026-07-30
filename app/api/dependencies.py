@@ -85,3 +85,19 @@ async def get_current_user(
     return user
 
 CurrentUserDep = Annotated[dict[str, Any], Depends(get_current_user)]
+
+
+# ── Admin Authorization Dependency ──
+async def get_admin_user(
+    current_user: CurrentUserDep,
+) -> dict[str, Any]:
+    """Validates that the current authenticated user has admin privileges."""
+    is_admin = current_user.get("is_admin", False) or current_user.get("role") == "admin"
+    if not is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required to access this resource",
+        )
+    return current_user
+
+AdminUserDep = Annotated[dict[str, Any], Depends(get_admin_user)]
