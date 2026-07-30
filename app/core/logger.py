@@ -1,33 +1,35 @@
+"""Structured logging configuration using structlog."""
+
 import logging
 import sys
-import json
-from datetime import datetime, timezone
+import structlog
+from app.core.config import get_settings
 
-class JSONFormatter(logging.Formatter):
-    def format(self, record: logging.LogRecord) -> str:
-        log_obj = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "level": record.levelname,
-            "message": record.getMessage(),
-            "logger": record.name,
-            "module": record.module,
-            "line": record.lineno
-        }
-        if hasattr(record, "request_id"):
-            log_obj["request_id"] = record.request_id
-        if record.exc_info:
-            log_obj["exception"] = self.formatException(record.exc_info)
-        return json.dumps(log_obj)
+settings = get_settings()
 
-def setup_logger() -> logging.Logger:
-    logger = logging.getLogger("gallery_vault")
-    logger.setLevel(logging.INFO)
-    logger.handlers.clear()
+def configure_logging() -> None:
+    log_level = getattr(logging, settings.APP_LOG_LEVEL.upper(), logging.INFO)
+    logging.basicConfig(format="%(message)s", stream=sys.stdout, level=log_level)
+
+    shared_processors: list = [
+        structlog.contextvars.merge_contextvars,
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso", utc=True),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+    ]
+
+    renderer = structlog.processors.JSONRenderer() if settings.is_production else structlog.dev.ConsoleRenderer(colors=True)
     
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JSONFormatter())
-    logger.addHandler(handler)
-    logger.propagate = False
-    return logger
+    structlog.configure(
+        processors=shared_processors + [renderer],
+        wrapper_class=structlog.make_filtering_bound_logger(log_level),
+        logger_factory=structlog.PrintLoggerFactory(),
+        cache_logger_on_first_use=True,
+    )
 
-logger = setup_logger()
+    for noisy in ("uvicorn.access", "uvicorn.error", "motor.core", "httpx", "httpcore", "asyncio"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
+    return structlog.get_logger(name)
