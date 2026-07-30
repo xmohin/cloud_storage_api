@@ -1,8 +1,10 @@
 from enum import Enum
 
+
 class UserRole(str, Enum):
     USER = "user"
     ADMIN = "admin"
+
 
 class UploadStatus(str, Enum):
     PENDING = "pending"
@@ -10,6 +12,7 @@ class UploadStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
 
+
 class RetentionPolicy:
-    TRASH_RETENTION_DAYS = 30
-    CHUNK_EXPIRATION_HOURS = 24
+    TRASH_RETENTION_DAYS: int = 30
+    CHUNK_EXPIRATION_HOURS: int = 24
