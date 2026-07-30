@@ -1,51 +1,80 @@
-# app/api/v1/security.py
-from fastapi import APIRouter, Depends, HTTPException, status
-from app.api.dependencies import CurrentUserDep, DatabaseDep
-from app.core.security import security
-from app.models.schemas import ApiResponse, PinSet, PinVerify, PinChange
+"""Security utility functions for authentication, hashing, and tokens."""
 
-router = APIRouter(prefix="/security", tags=["Security"])
+import hashlib
+import hmac
+import secrets
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Tuple
+import jwt
+from passlib.context import CryptContext
+from app.core.config import get_settings
 
-@router.post("/pin/set")
-async def set_pin(payload: PinSet, user: CurrentUserDep, db: DatabaseDep):
-    if user.get("pin_hash"): raise HTTPException(400, detail="PIN already set. Use /change instead.")
-    await db.users.update_one({"_id": user["_id"]}, {"$set": {"pin_hash": security.hash_password(payload.pin)}})
-    return ApiResponse(message="PIN set successfully")
+settings = get_settings()
 
-@router.post("/pin/verify")
-async def verify_pin(payload: PinVerify, user: CurrentUserDep):
-    if not user.get("pin_hash") or not security.verify_password(payload.pin, user["pin_hash"]):
-        raise HTTPException(401, detail="Invalid PIN")
-    return ApiResponse(message="PIN verified")
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-@router.put("/pin/change")
-async def change_pin(payload: PinChange, user: CurrentUserDep, db: DatabaseDep):
-    if not user.get("pin_hash") or not security.verify_password(payload.current_pin, user["pin_hash"]):
-        raise HTTPException(401, detail="Invalid current PIN")
-    await db.users.update_one({"_id": user["_id"]}, {"$set": {"pin_hash": security.hash_password(payload.new_pin)}})
-    return ApiResponse(message="PIN changed")
 
-@router.post("/lock")
-async def lock_app(user: CurrentUserDep, db: DatabaseDep):
-    # Set a flag in user session or profile
-    return ApiResponse(message="App locked")
+class SecurityService:
+    @staticmethod
+    def hash_password(password: str) -> str:
+        return pwd_context.hash(password)
 
-@router.post("/unlock")
-async def unlock_app(user: CurrentUserDep):
-    return ApiResponse(message="App unlocked")
+    @staticmethod
+    def verify_password(plain_password: str, hashed_password: str) -> bool:
+        return pwd_context.verify(plain_password, hashed_password)
 
-@router.get("/sessions")
-async def list_sessions(user: CurrentUserDep, db: DatabaseDep):
-    sessions = await db.sessions.find({"user_id": user["_id"], "is_active": True}).to_list(None)
-    return ApiResponse(data=sessions)
+    @staticmethod
+    def generate_otp(length: int = 6) -> str:
+        return "".join([str(secrets.randbelow(10)) for _ in range(length)])
 
-@router.delete("/session/{session_id}")
-async def delete_session(session_id: str, user: CurrentUserDep, db: DatabaseDep):
-    await db.sessions.update_one({"_id": session_id, "user_id": user["_id"]}, {"$set": {"is_active": False}})
-    return ApiResponse(message="Session revoked")
+    @staticmethod
+    def hash_otp(otp: str) -> str:
+        return hmac.new(
+            settings.SECRET_KEY.encode(),
+            otp.encode(),
+            hashlib.sha256
+        ).hexdigest()
 
-@router.get("/devices")
-async def list_devices(user: CurrentUserDep, db: DatabaseDep):
-    # Same as sessions but filtered by unique user agent
-    sessions = await db.sessions.find({"user_id": user["_id"], "is_active": True}).to_list(None)
-    return ApiResponse(data=sessions)
+    @staticmethod
+    def verify_otp(plain_otp: str, hashed_otp: str) -> bool:
+        return hmac.compare_digest(SecurityService.hash_otp(plain_otp), hashed_otp)
+
+    @staticmethod
+    def create_access_token(subject: str) -> Tuple[str, str]:
+        jti = secrets.token_hex(16)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+        to_encode = {
+            "sub": str(subject),
+            "exp": expire,
+            "jti": jti,
+            "type": "access"
+        }
+        encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+        return encoded_jwt, jti
+
+    @staticmethod
+    def create_refresh_token(subject: str) -> Tuple[str, str]:
+        jti = secrets.token_hex(16)
+        expire = datetime.now(timezone.utc) + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
+        to_encode = {
+            "sub": str(subject),
+            "exp": expire,
+            "jti": jti,
+            "type": "refresh"
+        }
+        encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+        return encoded_jwt, jti
+
+    @staticmethod
+    def decode_token(token: str, expected_type: str = "access") -> Dict[str, Any]:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        if payload.get("type") != expected_type:
+            raise ValueError("Invalid token type")
+        return payload
+
+    @staticmethod
+    def generate_share_code(length: int = 8) -> str:
+        return secrets.token_urlsafe(length)[:length]
+
+
+security = SecurityService()
