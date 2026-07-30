@@ -14,6 +14,15 @@ class Database:
     _client: AsyncIOMotorClient | None = None
     _database: AsyncIOMotorDatabase | None = None
 
+    def __getattr__(self, name: str) -> Any:
+        """
+        Proxy attribute access to the underlying Motor database instance.
+        This allows accessing collections directly via db.collection_name (e.g., db.users).
+        """
+        if self._database is None:
+            raise RuntimeError("Database not initialised")
+        return self._database[name]
+
     @classmethod
     async def connect(cls) -> None:
         if cls._client is not None:
