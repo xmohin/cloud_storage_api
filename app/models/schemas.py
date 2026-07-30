@@ -168,7 +168,7 @@ FileMoveRequest = FileMove
 FileCopyRequest = FileCopy
 
 
-# ── Chunked Upload Schemas (Fix for uploads.py) ──
+# ── Chunked Upload Schemas ──
 
 class UploadInitRequest(BaseModel):
     filename: str = Field(..., min_length=1, max_length=255)
@@ -214,6 +214,12 @@ class ShareResponse(ORMModel):
     download_count: int = 0
     expires_at: datetime | None = None
     created_at: datetime
+
+
+# Share Aliases (Fix for shares.py imports)
+ShareCreateRequest = ShareCreate
+SharePasswordUpdateRequest = SharePasswordUpdate
+ShareExpireUpdateRequest = ShareExpireUpdate
 
 
 # ── Notification Schemas ──
