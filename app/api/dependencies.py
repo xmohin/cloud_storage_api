@@ -21,7 +21,8 @@ SettingsDep = Annotated[Settings, Depends(get_app_settings)]
 
 # ── Database Dependency ──
 async def get_database() -> AsyncIOMotorDatabase:
-    return db.get_db()
+    # db অবজেক্টটি নিজেই AsyncIOMotorDatabase, তাই সরাসরি return db হবে
+    return db
 
 DatabaseDep = Annotated[AsyncIOMotorDatabase, Depends(get_database)]
 
