@@ -5,7 +5,7 @@ services:
     plan: starter
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    healthCheckPath: /health
+    healthCheckPath: /api/v1/health
     autoDeploy: true
     envVars:
       - key: APP_ENV
@@ -43,6 +43,8 @@ services:
       - key: MONGODB_URI
         sync: false
       - key: JWT_SECRET_KEY
+        sync: false
+      - key: JWT_REFRESH_SECRET_KEY
         sync: false
       - key: TELEGRAM_API_ID
         sync: false
