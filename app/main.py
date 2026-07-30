@@ -4,6 +4,7 @@ import importlib
 from contextlib import asynccontextmanager
 from typing import Any
 from fastapi import APIRouter, FastAPI
+from fastapi.responses import JSONResponse
 
 from app import __version__
 from app.core.config import get_settings
@@ -151,3 +152,17 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+# ── Health Check & Root Endpoints (Added to fix 404 errors) ──
+
+@app.get("/", tags=["Health"])
+async def root():
+    return {"message": f"Welcome to {settings.APP_NAME} API", "status": "active"}
+
+@app.get("/health", tags=["Health"])
+@app.get("/api/health", tags=["Health"])
+async def health_check():
+    return JSONResponse(
+        status_code=200,
+        content={"status": "ok", "service": f"{settings.APP_NAME} API is running smoothly"}
+    )
