@@ -1,37 +1,50 @@
-# Multi-stage Docker build for optimized image size and security
+# ════════════════════════════════════════════════════════════
+# Stage 1 — Builder
+# ════════════════════════════════════════════════════════════
 FROM python:3.12-slim AS builder
 
-WORKDIR /app
+WORKDIR /build
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libffi-dev \
-    libssl-dev \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-FROM python:3.12-slim
+# ════════════════════════════════════════════════════════════
+# Stage 2 — Runtime
+# ════════════════════════════════════════════════════════════
+FROM python:3.12-slim AS runtime
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN groupadd -r appuser \
+    && useradd -r -g appuser -d /app -s /sbin/nologin appuser
 
 WORKDIR /app
 
-RUN groupadd -g 10001 appgroup && \
-    useradd -u 10001 -g appgroup -s /bin/sh appuser
-
 COPY --from=builder /install /usr/local
-COPY . .
+COPY --chown=appuser:appuser . .
 
-RUN mkdir -p /tmp/gallery_vault_temp && chown -R appuser:appgroup /app /tmp/gallery_vault_temp
+# Create temp directory for chunked uploads
+RUN mkdir -p /app/tmp_uploads && chown appuser:appuser /app/tmp_uploads
 
 USER appuser
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python -c "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:${PORT:-8000}/health').status==200 else sys.exit(1)"
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+CMD ["sh", "-c", "gunicorn app.main:app \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --workers ${WEB_CONCURRENCY:-4} \
+    --bind 0.0.0.0:${PORT:-8000} \
+    --timeout 120 \
+    --keep-alive 5 \
+    --graceful-timeout 30"]
