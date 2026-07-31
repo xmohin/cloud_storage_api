@@ -1,6 +1,6 @@
 """Folder management endpoints."""
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, status
 from app.api.dependencies import CurrentUserDep, DatabaseDep, PaginationDep
 from app.services.file_service import file_service
 from app.models.schemas import (
@@ -22,7 +22,7 @@ async def create_folder(payload: FolderCreateRequest, user: CurrentUserDep, db: 
 
 @router.get("")
 async def list_root_folders(user: CurrentUserDep, db: DatabaseDep, pagination: PaginationDep):
-    res = await file_service.list_files(db, user["_id"], None, pagination.skip, pagination.per_page)
+    res = await file_service.list_files(db, user["_id"], None, pagination.skip, pagination.limit)
     folders = [FileMetadata(**f) for f in res["files"] if f.get("is_folder")]
     return ApiResponse(data={"folders": folders, "total": len(folders)})
 

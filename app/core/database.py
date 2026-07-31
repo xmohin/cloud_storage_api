@@ -74,8 +74,8 @@ class Database:
         except Exception:
             pass
             
-        # Updated session index with unique=True and sparse=True
-        await db.sessions.create_index("user_id", unique=True, sparse=True)
+        # Allow multiple active sessions per user while keeping refresh tokens unique.
+        await db.sessions.create_index([("user_id", 1), ("is_active", 1)], name="idx_sessions_user_active")
         await db.sessions.create_index("refresh_jti", unique=True)
         await db.sessions.create_index("expires_at", expireAfterSeconds=0)
         

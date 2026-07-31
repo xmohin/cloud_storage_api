@@ -1,11 +1,9 @@
 """Share link management endpoints."""
 
-from datetime import datetime, timezone
-from uuid import uuid4
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse
 from app.api.dependencies import CurrentUserDep, DatabaseDep
-from app.core.security import security
+from app.services.share_service import share_service
 from app.models.schemas import (
     ApiResponse,
     ShareCreateRequest,
@@ -17,92 +15,36 @@ from app.models.schemas import (
 router = APIRouter(prefix="/shares", tags=["Share Links"])
 
 
-def _ensure_tz_aware(dt: datetime | None) -> datetime | None:
-    if dt and dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt
-
-
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_share(payload: ShareCreateRequest, user: CurrentUserDep, db: DatabaseDep):
-    file_doc = await db.files.find_one({"_id": payload.file_id, "owner_id": user["_id"], "deleted_at": None})
-    if not file_doc:
-        return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={"success": False, "message": "File or folder not found"}
-        )
-
-    share_code = security.generate_share_code()
-    password_hash = security.hash_password(payload.password) if payload.password else None
-
-    share_doc = {
-        "_id": str(uuid4()),
-        "share_code": share_code,
-        "file_id": payload.file_id,
-        "created_by": user["_id"],
-        "password_hash": password_hash,
-        "expires_at": payload.expires_at,
-        "max_downloads": payload.max_downloads,
-        "download_count": 0,
-        "created_at": datetime.now(timezone.utc),
-        "is_active": True
-    }
-
-    await db.shares.insert_one(share_doc)
-    return ApiResponse(data=ShareResponse(**share_doc))
+    share_doc = await share_service.create_share(
+        db,
+        owner_id=user["_id"],
+        file_id=payload.file_id,
+        password=payload.password,
+        expires_in_hours=payload.expires_in_hours,
+        max_downloads=payload.max_downloads,
+    )
+    return ApiResponse(data=ShareResponse(**{"_id": share_doc["share_token"], **share_doc}))
 
 
 @router.post("/{code}/access")
-async def access_share(code: str, payload: ShareAccessRequest, db: DatabaseDep):
-    share = await db.shares.find_one({"share_code": code, "is_active": True})
-    if not share:
-        return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={"success": False, "message": "Share link not found or expired"}
-        )
-
-    # Expiry Check
-    expires_at = _ensure_tz_aware(share.get("expires_at"))
-    if expires_at and datetime.now(timezone.utc) > expires_at:
-        await db.shares.update_one({"_id": share["_id"]}, {"$set": {"is_active": False}})
-        return JSONResponse(
-            status_code=status.HTTP_410_GONE,
-            content={"success": False, "message": "Share link has expired"}
-        )
-
-    # Max Downloads Limit Check
-    if share.get("max_downloads") and share["download_count"] >= share["max_downloads"]:
-        return JSONResponse(
-            status_code=status.HTTP_410_GONE,
-            content={"success": False, "message": "Download limit reached"}
-        )
-
-    # Password Check
-    if share.get("password_hash"):
-        if not payload.password or not security.verify_password(payload.password, share["password_hash"]):
-            return JSONResponse(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                content={"success": False, "message": "Password required or incorrect"}
-            )
-
-    file_doc = await db.files.find_one({"_id": share["file_id"], "deleted_at": None})
-    if not file_doc:
-        return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={"success": False, "message": "Shared file no longer exists"}
-        )
-
-    # Increment download/access count
-    await db.shares.update_one({"_id": share["_id"]}, {"$inc": {"download_count": 1}})
-
+async def access_share(code: str, payload: ShareAccessRequest, request: Request, db: DatabaseDep):
+    file_doc = await share_service.verify_and_access_share(
+        db,
+        share_token=code,
+        provided_password=payload.password,
+        ip_address=request.client.host if request.client else "unknown",
+        user_agent=request.headers.get("User-Agent", "unknown"),
+    )
     return ApiResponse(data=FileMetadata(**file_doc))
 
 
 @router.delete("/{share_id}")
 async def revoke_share(share_id: str, user: CurrentUserDep, db: DatabaseDep):
     res = await db.shares.update_one(
-        {"_id": share_id, "created_by": user["_id"]},
-        {"$set": {"is_active": False}}
+        {"_id": share_id, "owner_id": user["_id"]},
+        {"$set": {"is_revoked": True}}
     )
     if res.modified_count == 0:
         return JSONResponse(

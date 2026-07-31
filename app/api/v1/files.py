@@ -1,10 +1,11 @@
 """File management and streaming endpoints."""
 
 from typing import Optional
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, status
 from fastapi.responses import StreamingResponse
-from app.api.dependencies import CurrentUserDep, DatabaseDep, PaginationDep, StorageEngineDep
+from app.api.dependencies import CurrentUserDep, DatabaseDep, PaginationDep
 from app.services.file_service import file_service
+from app.services.telegram_service import telegram_service
 from app.models.schemas import (
     ApiResponse,
     FileMetadata,
@@ -22,7 +23,7 @@ async def list_files(
     folder_id: Optional[str] = None
 ):
     res = await file_service.list_files(
-        db, user["_id"], folder_id, pagination.skip, pagination.per_page
+        db, user["_id"], folder_id, pagination.skip, pagination.limit
     )
     files = [FileMetadata(**f) for f in res["files"]]
     return ApiResponse(data={"files": files, "total": res["total"]})
@@ -56,12 +57,13 @@ async def stream_file(
     file_id: str,
     user: CurrentUserDep,
     db: DatabaseDep,
-    storage: StorageEngineDep,
     range: Optional[str] = Header(None)
 ):
     file_doc = await file_service._get_file_doc(db, file_id, user["_id"])
     if file_doc.get("is_folder"):
         raise HTTPException(status_code=400, detail="Cannot stream a folder")
+    if not file_doc.get("telegram_message_id"):
+        raise HTTPException(status_code=409, detail="File is not ready for streaming")
 
     file_size = file_doc["size_bytes"]
     start_offset = 0
@@ -83,10 +85,10 @@ async def stream_file(
 
     # Chunk generator from Storage Engine
     async def chunk_generator():
-        async for chunk in storage.download_file_stream(
-            file_doc["telegram_message_id"], 
-            start=start_offset, 
-            end=end_offset
+        async for chunk in telegram_service.stream_download(
+            file_doc["telegram_message_id"],
+            offset=start_offset,
+            limit=content_length,
         ):
             yield chunk
 

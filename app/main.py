@@ -66,6 +66,7 @@ security_router = safe_import_router(["app.api.v1.security"])
 share_router = safe_import_router(["app.api.v1.shares", "app.api.v1.share"])
 storage_router = safe_import_router(["app.api.v1.storage"])
 system_router = safe_import_router(["app.api.v1.system"])
+uploads_router = safe_import_router(["app.api.v1.uploads", "app.api.v1.upload"])
 user_router = safe_import_router(["app.api.v1.users", "app.api.v1.user"])
 
 
@@ -144,6 +145,7 @@ def create_app() -> FastAPI:
     app.include_router(share_router, prefix="/api/v1")
     app.include_router(backup_router, prefix="/api/v1")
     app.include_router(storage_router, prefix="/api/v1")
+    app.include_router(uploads_router, prefix="/api/v1")
     app.include_router(notifications_router, prefix="/api/v1")
     app.include_router(admin_router, prefix="/api/v1")
     app.include_router(security_router, prefix="/api/v1")

@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     MONGODB_SERVER_SELECTION_TIMEOUT_MS: int = 5000
 
     JWT_SECRET_KEY: str
+    JWT_REFRESH_SECRET_KEY: str | None = None
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
